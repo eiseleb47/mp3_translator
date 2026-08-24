@@ -23,20 +23,26 @@ cd mp3_translator
 ```
 
 `setup.sh` installiert die Systempakete (ffmpeg, GTK3, PyGObject), legt ein venv in `.venv` an,
-installiert die Python-Pakete und richtet einen Menüeintrag „Audio-Transkript" ein.
+installiert die Python-Pakete und richtet „Audio-Transkript" im Anwendungsmenü **und als Symbol
+auf dem Schreibtisch** ein.
 
 Optionen:
 
 | Option | Wirkung |
 |---|---|
 | `--no-system-deps` | Systempakete überspringen (wenn schon vorhanden) |
+| `--no-desktop-icon` | Kein Symbol auf dem Schreibtisch anlegen |
 | `--prefetch [modell]` | Sprachmodell sofort herunterladen (Standard `small`) |
+
+Das Schreibtisch-Symbol wird ausführbar gesetzt und per `gio set … metadata::trusted true`
+als vertrauenswürdig markiert. Zeigt der Dateimanager es trotzdem als nicht startbar an:
+Rechtsklick → „Starten erlauben".
 
 Getestet auf Linux Mint (apt) und Arch/Garuda (pacman); dnf und zypper werden ebenfalls erkannt.
 
 ## Benutzung
 
-Start über das Anwendungsmenü oder `./run.sh`.
+Start über das Symbol auf dem Schreibtisch, das Anwendungsmenü oder `./run.sh`.
 
 1. **Dateiauswahl startet in** — Ordner, in dem der Dateidialog öffnet. Bleibt dauerhaft gespeichert.
 2. **Automatisch in den neuesten Wochenordner** — WhatsApp legt Sprachnachrichten in Wochenordnern

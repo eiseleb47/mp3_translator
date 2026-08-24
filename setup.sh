@@ -6,12 +6,14 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV="$DIR/.venv"
 SKIP_SYSTEM=0
 PREFETCH=""
+DESKTOP_ICON=1
 
 usage() {
   cat <<'USAGE'
 Verwendung: ./setup.sh [Optionen]
 
   --no-system-deps     Systempakete (ffmpeg, GTK3) nicht installieren
+  --no-desktop-icon    Kein Symbol auf dem Schreibtisch anlegen
   --prefetch [MODELL]  Whisper-Modell sofort herunterladen (Standard: small)
   -h, --help           Diese Hilfe
 USAGE
@@ -20,6 +22,7 @@ USAGE
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --no-system-deps) SKIP_SYSTEM=1; shift ;;
+    --no-desktop-icon) DESKTOP_ICON=0; shift ;;
     --prefetch)
       if [[ -n "${2:-}" && "${2:-}" != -* ]]; then PREFETCH="$2"; shift 2; else PREFETCH="small"; shift; fi
       ;;
@@ -109,10 +112,16 @@ echo "  ✓ GTK3, faster-whisper, python-docx, ffmpeg vorhanden"
 
 chmod +x "$DIR/run.sh"
 
-say "Menüeintrag installieren"
-APPS="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
+say "Symbol und Menüeintrag installieren"
+SHARE="${XDG_DATA_HOME:-$HOME/.local/share}"
+ICONS="$SHARE/icons/hicolor/scalable/apps"
+mkdir -p "$ICONS"
+cp "$DIR/assets/audio-transkript.svg" "$ICONS/audio-transkript.svg"
+
+APPS="$SHARE/applications"
 mkdir -p "$APPS"
-cat > "$APPS/audio-transkript.desktop" <<DESKTOP
+LAUNCHER="$APPS/audio-transkript.desktop"
+cat > "$LAUNCHER" <<DESKTOP
 [Desktop Entry]
 Type=Application
 Version=1.0
@@ -120,17 +129,36 @@ Name=Audio-Transkript
 Comment=Sprachnachrichten in Word-Dokumente umwandeln
 Exec=$DIR/run.sh
 Path=$DIR
-Icon=audio-x-generic
+Icon=audio-transkript
 Terminal=false
 StartupWMClass=Audio-Transkript
-Categories=AudioVideo;Audio;Utility;
+Categories=AudioVideo;Audio;
 Keywords=Transkript;Whisper;WhatsApp;Sprachnachricht;
 DESKTOP
-chmod +x "$APPS/audio-transkript.desktop"
+chmod +x "$LAUNCHER"
 if command -v update-desktop-database >/dev/null 2>&1; then
   update-desktop-database "$APPS" || true
 fi
-echo "  ✓ $APPS/audio-transkript.desktop"
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+  gtk-update-icon-cache -f -t "$SHARE/icons/hicolor" >/dev/null 2>&1 || true
+fi
+if command -v desktop-file-validate >/dev/null 2>&1; then
+  desktop-file-validate "$LAUNCHER" || warn "Menüeintrag meldet Auffälligkeiten (siehe oben)."
+fi
+echo "  ✓ $LAUNCHER"
+
+if [[ $DESKTOP_ICON -eq 1 ]]; then
+  DESKTOP_DIR="$(xdg-user-dir DESKTOP 2>/dev/null || true)"
+  [[ -n "$DESKTOP_DIR" ]] || DESKTOP_DIR="$HOME/Desktop"
+  if [[ -d "$DESKTOP_DIR" ]]; then
+    install -m 755 "$LAUNCHER" "$DESKTOP_DIR/audio-transkript.desktop"
+    # Nemo/Nautilus starten .desktop-Dateien sonst nicht, sondern zeigen sie als Text.
+    gio set "$DESKTOP_DIR/audio-transkript.desktop" metadata::trusted true 2>/dev/null || true
+    echo "  ✓ $DESKTOP_DIR/audio-transkript.desktop"
+  else
+    warn "Schreibtisch-Ordner nicht gefunden ($DESKTOP_DIR) – Symbol übersprungen."
+  fi
+fi
 
 mkdir -p "$HOME/Documents/audio_texte"
 
