@@ -2,6 +2,7 @@
 
 import atexit
 import functools
+import os
 import shutil
 import tempfile
 import time
@@ -34,6 +35,74 @@ def sweep_stale_workdirs(max_age_hours: float = 12.0) -> int:
         except OSError:
             continue
     return removed
+
+
+def collect_audio_files(source: Path, cancel) -> list[Path]:
+    """Alle Audiodateien unterhalb von source – WhatsApp legt sie in Wochenordnern ab."""
+    endings = {ext.lower() for ext in audio.AUDIO_EXTENSIONS}
+    found: list[Path] = []
+    for root, dirs, names in os.walk(source, onerror=lambda _exc: None):
+        if cancel.is_set():
+            break
+        dirs.sort()
+        for name in sorted(names):
+            if Path(name).suffix.lower() in endings:
+                found.append(Path(root) / name)
+    return found
+
+
+def run_copy_job(source_dir: str, target_dir: str, emit, cancel) -> dict:
+    """Sichert Sprachnachrichten aus dem WhatsApp-Ordner in den Startordner."""
+    source = Path(source_dir).expanduser()
+    target = Path(target_dir).expanduser()
+
+    if not source.is_dir():
+        raise JobError(f"WhatsApp-Ordner nicht erreichbar:\n{source}\n\nHandy angesteckt und entsperrt?")
+    if source == target or target.is_relative_to(source):
+        raise JobError("Quell- und Zielordner dürfen nicht ineinander liegen.")
+    try:
+        target.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise JobError(f"Zielordner konnte nicht angelegt werden: {exc}") from exc
+
+    emit("status", text="Suche Sprachnachrichten am Handy…")
+    found = collect_audio_files(source, cancel)
+    if cancel.is_set():
+        return {"copied": [], "skipped": 0, "failed": [], "cancelled": True, "target": str(target)}
+    emit("log", text=f"{len(found)} Audiodatei(en) im WhatsApp-Ordner gefunden.")
+
+    copied: list[str] = []
+    failed: list[tuple[str, str]] = []
+    skipped = 0
+    total = max(1, len(found))
+
+    for index, item in enumerate(found, start=1):
+        if cancel.is_set():
+            return {"copied": copied, "skipped": skipped, "failed": failed,
+                    "cancelled": True, "target": str(target)}
+        emit("status", text=f"Sichere {index}/{len(found)}: {item.name}")
+        emit("progress", value=index / total * 100.0)
+        destination = target / item.name
+        try:
+            size = item.stat().st_size
+            if destination.exists():
+                if destination.stat().st_size == size:
+                    skipped += 1
+                    continue
+                emit("log", text=f"↻ {item.name} war unvollständig – wird erneut kopiert")
+            shutil.copyfile(item, destination)
+            written = destination.stat().st_size
+            if size and written != size:
+                destination.unlink(missing_ok=True)
+                raise OSError(f"nur {written} von {size} Bytes übertragen")
+            copied.append(item.name)
+        except OSError as exc:
+            failed.append((item.name, str(exc)))
+            emit("log", text=f"✗ {item.name}: {exc}")
+
+    emit("progress", value=100.0)
+    return {"copied": copied, "skipped": skipped, "failed": failed,
+            "cancelled": False, "target": str(target)}
 
 
 def run_job(files, cfg: dict, emit, cancel, transcriber: Transcriber | None = None) -> dict:

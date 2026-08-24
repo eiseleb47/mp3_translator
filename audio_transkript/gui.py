@@ -11,7 +11,7 @@ from gi.repository import Gdk, Gio, GLib, Gtk  # noqa: E402
 
 from . import config  # noqa: E402
 from .audio import AUDIO_EXTENSIONS  # noqa: E402
-from .job import JobError, run_job, sweep_stale_workdirs  # noqa: E402
+from .job import JobError, run_copy_job, run_job, sweep_stale_workdirs  # noqa: E402
 from .transcriber import Transcriber  # noqa: E402
 
 APP_ID = "org.audiotranskript.AudioTranskript"
@@ -115,12 +115,17 @@ class Window(Gtk.ApplicationWindow):
         self.auto_newest.connect("toggled", self.on_auto_newest_toggled)
         grid.attach(self.auto_newest, 1, 1, 2, 1)
         self.settings_widgets.append(self.auto_newest)
+        self.whatsapp_entry = self._path_row(
+            grid, 2, "WhatsApp-Ordner am Handy:", self.cfg["whatsapp_dir"],
+            self.on_choose_whatsapp_dir,
+        )
+        self.whatsapp_entry.set_placeholder_text("noch nicht eingestellt")
         self.output_entry = self._path_row(
-            grid, 2, "Transkripte speichern in:", self.cfg["output_dir"], self.on_choose_output_dir
+            grid, 3, "Transkripte speichern in:", self.cfg["output_dir"], self.on_choose_output_dir
         )
 
         options = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        grid.attach(options, 0, 3, 3, 1)
+        grid.attach(options, 0, 4, 3, 1)
         options.pack_start(self._label("Modell:"), False, False, 0)
         self.model_box = Gtk.ComboBoxText()
         for name in config.MODELS:
@@ -149,6 +154,15 @@ class Window(Gtk.ApplicationWindow):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         box.pack_start(row, False, False, 0)
+
+        self.copy_button = Gtk.Button(label="Vom Handy sichern")
+        self.copy_button.set_size_request(-1, 42)
+        self.copy_button.set_tooltip_text(
+            "Kopiert alle Sprachnachrichten aus dem WhatsApp-Ordner des Handys in den "
+            "oben eingestellten Startordner.\nBereits vorhandene Dateien werden übersprungen."
+        )
+        self.copy_button.connect("clicked", self.on_copy_clicked)
+        row.pack_start(self.copy_button, False, False, 0)
 
         self.select_button = Gtk.Button(label="Audiodateien auswählen…")
         self.select_button.get_style_context().add_class("suggested-action")
@@ -188,6 +202,7 @@ class Window(Gtk.ApplicationWindow):
         codes = [code for code, _label in config.LANGUAGES]
         self.cfg = {
             "start_dir": self.start_entry.get_text(),
+            "whatsapp_dir": self.whatsapp_entry.get_text(),
             "output_dir": self.output_entry.get_text(),
             "model": config.MODELS[self.model_box.get_active()],
             "language": codes[self.language_box.get_active()],
@@ -233,6 +248,9 @@ class Window(Gtk.ApplicationWindow):
     def on_choose_start_dir(self, _button) -> None:
         self._choose_folder("Startordner für die Dateiauswahl", self.start_entry)
         self.refresh_start_tooltip()
+
+    def on_choose_whatsapp_dir(self, _button) -> None:
+        self._choose_folder("WhatsApp-Ordner am Handy", self.whatsapp_entry)
 
     def on_choose_output_dir(self, _button) -> None:
         self._choose_folder("Zielordner für die Transkripte", self.output_entry)
@@ -299,21 +317,86 @@ class Window(Gtk.ApplicationWindow):
         elif accepted and not skipped:
             self.append_log("Keine Dateien ausgewählt.")
 
-    def start(self, files: list[str]) -> None:
+    def on_copy_clicked(self, _button) -> None:
+        if self.worker and self.worker.is_alive():
+            return
+        source = self.whatsapp_entry.get_text().strip()
+        if not config.is_dir(source):
+            self.message(
+                Gtk.MessageType.INFO,
+                "Bitte zuerst den WhatsApp-Ordner am Handy einstellen.\n\n"
+                "Er liegt üblicherweise unter:\n"
+                "Android/media/com.whatsapp/WhatsApp/Media/WhatsApp Voice Notes\n\n"
+                "Handy anstecken, entsperren und „Dateiübertragung“ wählen.",
+            )
+            self.on_choose_whatsapp_dir(None)
+            source = self.whatsapp_entry.get_text().strip()
+            if not config.is_dir(source):
+                return
+        self.start_copy(source, self.start_entry.get_text())
+
+    def begin_run(self, status: str) -> None:
         self.cancel.clear()
         self.select_button.set_sensitive(False)
+        self.copy_button.set_sensitive(False)
         self.cancel_button.set_sensitive(True)
+        self.set_settings_sensitive(False)
         self.progress.set_fraction(0.0)
         self.progress.set_show_text(True)
         self.progress.set_text("0 %")
-        self.set_status(f"{len(files)} Datei(en) ausgewählt.")
+        self.set_status(status)
+
+    def end_run(self) -> None:
+        self.select_button.set_sensitive(True)
+        self.copy_button.set_sensitive(True)
+        self.cancel_button.set_sensitive(False)
+        self.set_settings_sensitive(True)
+
+    def start_copy(self, source: str, target: str) -> None:
+        self.begin_run("Sicherung wird vorbereitet…")
+        self.append_log(f"--- Sicherung: {source} → {target} ---")
+
+        def emit(kind: str, **payload) -> None:
+            GLib.idle_add(self.on_event, kind, payload)
+
+        def work() -> None:
+            try:
+                emit("copy_done", summary=run_copy_job(source, target, emit, self.cancel))
+            except JobError as exc:
+                emit("failed", message=str(exc))
+            except Exception as exc:  # unerwartet – trotzdem sichtbar machen
+                emit("failed", message=f"{type(exc).__name__}: {exc}")
+
+        self.worker = threading.Thread(target=work, daemon=True)
+        self.worker.start()
+
+    def finish_copy(self, summary: dict) -> None:
+        self.end_run()
+        copied, skipped, failed = summary["copied"], summary["skipped"], summary["failed"]
+        parts = [f"{len(copied)} neu gesichert"]
+        if skipped:
+            parts.append(f"{skipped} schon vorhanden")
+        if failed:
+            parts.append(f"{len(failed)} fehlgeschlagen")
+        if summary["cancelled"]:
+            parts.append("abgebrochen")
+        text = ", ".join(parts) + "."
+        self.set_status(text)
+        self.append_log(f"--- Sicherung fertig: {text} ---")
+        if failed:
+            details = "\n".join(f"• {name}: {reason}" for name, reason in failed[:6])
+            self.message(Gtk.MessageType.WARNING, f"{text}\n\n{details}")
+        else:
+            self.message(Gtk.MessageType.INFO, f"{text}\n\nZielordner:\n{summary['target']}")
+
+    def start(self, files: list[str]) -> None:
+        self.begin_run(f"{len(files)} Datei(en) ausgewählt.")
         self.append_log(f"--- Start: {len(files)} Datei(en) ---")
 
         cfg = dict(self.cfg)
         # Festhalten, welcher Ordner tatsaechlich benutzt wird – die Anzeige darf
         # sich waehrend des Laufs nicht mehr aendern, sonst meldet finish() falsch.
         self.job_output_dir = cfg["output_dir"]
-        self.set_settings_sensitive(False)
 
         def emit(kind: str, **payload) -> None:
             GLib.idle_add(self.on_event, kind, payload)
@@ -345,6 +428,8 @@ class Window(Gtk.ApplicationWindow):
             self.progress.set_text(f"{value * 100:.0f} %")
         elif kind == "done":
             self.finish(payload["summary"])
+        elif kind == "copy_done":
+            self.finish_copy(payload["summary"])
         elif kind == "failed":
             self.finish(None, payload["message"])
         return False
@@ -354,9 +439,7 @@ class Window(Gtk.ApplicationWindow):
             widget.set_sensitive(sensitive)
 
     def finish(self, summary: dict | None, error: str | None = None) -> None:
-        self.select_button.set_sensitive(True)
-        self.cancel_button.set_sensitive(False)
-        self.set_settings_sensitive(True)
+        self.end_run()
         if error:
             self.progress.set_fraction(0.0)
             self.progress.set_show_text(False)

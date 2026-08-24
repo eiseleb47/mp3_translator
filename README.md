@@ -46,17 +46,41 @@ Nötige vorhanden ist, hilft `./setup.sh --no-system-deps`.
 
 Start über das Symbol auf dem Schreibtisch, das Anwendungsmenü oder `./run.sh`.
 
-1. **Dateiauswahl startet in** — Ordner, in dem der Dateidialog öffnet. Bleibt dauerhaft gespeichert.
+1. **Dateiauswahl startet in** — Ordner, in dem der Dateidialog öffnet. Bleibt dauerhaft
+   gespeichert. Das ist zugleich der Zielordner von „Vom Handy sichern".
 2. **Automatisch in den neuesten Wochenordner** — WhatsApp legt Sprachnachrichten in Wochenordnern
    ab (`202634` = KW 34/2026). Ist die Option aktiv, springt der Dialog automatisch in den
    höchsten Wochenordner. Für einen festen Ordner (z. B. eine eigene Kopie) einfach abschalten.
-3. **Transkripte speichern in** — Zielordner, standardmäßig `audio_texte` im
+3. **WhatsApp-Ordner am Handy** — Quelle für „Vom Handy sichern", siehe unten.
+4. **Transkripte speichern in** — Zielordner, standardmäßig `audio_texte` im
    Dokumentenordner des Systems (auf deutschen Systemen also `~/Dokumente/audio_texte`).
-4. **Modell / Sprache / Zeitmarken** — siehe unten.
-5. **Audiodateien auswählen…** — Mehrfachauswahl möglich; die Transkription startet sofort.
+5. **Modell / Sprache / Zeitmarken** — siehe unten.
+6. **Audiodateien auswählen…** — Mehrfachauswahl möglich; die Transkription startet sofort.
 
 Ausgewählte Dateien werden zuerst nach `/tmp/audio_transkript_*` kopiert und von dort verarbeitet.
 Das Handy kann also direkt nach dem Kopieren abgesteckt werden. Der tmp-Ordner wird danach gelöscht.
+
+### Vom Handy sichern
+
+WhatsApp löscht Sprachnachrichten nach etwa einer Woche aus seinem Medienordner. Der Knopf
+**„Vom Handy sichern"** kopiert sie vorher in Sicherheit: er durchsucht den eingestellten
+WhatsApp-Ordner samt aller Wochenordner (`202634`, `202635`, …) und legt jede Audiodatei
+flach im **Startordner** ab.
+
+- Bereits vorhandene Dateien werden übersprungen — der Knopf lässt sich also täglich drücken,
+  ohne Dubletten zu erzeugen.
+- Eine Datei, die beim letzten Mal unvollständig ankam, wird erkannt und erneut geholt.
+- Der Lauf zeigt Fortschritt und lässt sich mit „Abbrechen" stoppen.
+
+Quelle ist üblicherweise:
+
+```
+Android/media/com.whatsapp/WhatsApp/Media/WhatsApp Voice Notes
+```
+
+Liegt der Startordner ebenfalls auf dem Handy, läuft die Kopie technisch bedingt über den PC —
+MTP kann nicht auf dem Gerät selbst kopieren. Jede Datei wandert also zweimal über das Kabel.
+Ein Startordner auf dem PC ist entsprechend schneller.
 
 ### Benennung der Transkripte
 

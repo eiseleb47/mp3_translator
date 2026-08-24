@@ -45,10 +45,10 @@ def is_week_dir(name: str) -> bool:
     return 2000 <= int(name[:4]) <= 2999 and 1 <= int(name[4:]) <= 53
 
 
-def _is_dir(path: Path) -> bool:
+def is_dir(path) -> bool:
     """Path.is_dir() reicht vor Python 3.13 EACCES/ENOTCONN durch – etwa bei totem MTP-Mount."""
     try:
-        return path.is_dir()
+        return Path(path).expanduser().is_dir()
     except OSError:
         return False
 
@@ -57,7 +57,7 @@ def newest_week_dir(path: str) -> str:
     """Höchster Wochenordner unterhalb von path, sonst path selbst."""
     base = Path(existing_dir(path))
     try:
-        weeks = [d for d in base.iterdir() if _is_dir(d) and is_week_dir(d.name)]
+        weeks = [d for d in base.iterdir() if is_dir(d) and is_week_dir(d.name)]
     except OSError:
         return str(base)
     return str(max(weeks, key=lambda d: d.name)) if weeks else str(base)
@@ -66,7 +66,7 @@ def newest_week_dir(path: str) -> str:
 def existing_dir(path: str) -> str:
     """Nächster existierender Ordner (falls der gespeicherte Pfad z.B. abgesteckt wurde)."""
     candidate = Path(path).expanduser()
-    while not _is_dir(candidate) and candidate != candidate.parent:
+    while not is_dir(candidate) and candidate != candidate.parent:
         candidate = candidate.parent
     return str(candidate)
 
@@ -100,6 +100,7 @@ def defaults() -> dict:
     home = Path.home()
     return {
         "start_dir": str(home),
+        "whatsapp_dir": "",
         "output_dir": str(documents_dir() / "audio_texte"),
         "model": "small",
         "language": "auto",
@@ -116,6 +117,10 @@ def _clean(raw: dict) -> dict:
         value = raw.get(key)
         if isinstance(value, str) and value.strip():
             cfg[key] = str(Path(value).expanduser())
+    # Darf leer bleiben: solange nicht eingestellt, fragt der Knopf beim ersten Klick.
+    value = raw.get("whatsapp_dir")
+    if isinstance(value, str):
+        cfg["whatsapp_dir"] = str(Path(value).expanduser()) if value.strip() else ""
     if raw.get("model") in MODELS:
         cfg["model"] = raw["model"]
     if raw.get("language") in {code for code, _ in LANGUAGES}:
