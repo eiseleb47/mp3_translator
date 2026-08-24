@@ -36,11 +36,15 @@ class Transcriber:
         device, compute = _device_and_compute()
         key = (model_name, device, compute)
         if self._key != key:
+            # Erst entwerten: schlägt das Laden fehl, darf is_loaded() nicht weiter
+            # "geladen" melden und load() kein None zurückgeben.
+            self._key = None
             self._model = None
             threads = max(1, min(8, (os.cpu_count() or 4)))
-            self._model = WhisperModel(
+            model = WhisperModel(
                 model_name, device=device, compute_type=compute, cpu_threads=threads
             )
+            self._model = model
             self._key = key
         return self._model
 

@@ -5,6 +5,7 @@ import os
 import re
 import shutil
 import subprocess
+import time
 from datetime import date, datetime, timezone
 from pathlib import Path
 
@@ -18,10 +19,48 @@ class AudioError(RuntimeError):
     pass
 
 
-def _run(cmd: list[str]) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        cmd, stdin=subprocess.DEVNULL, capture_output=True, text=True, check=False
-    )
+class AudioCancelled(AudioError):
+    """Der Kindprozess wurde wegen eines Abbruchs beendet – kein Fehler der Datei."""
+
+
+FFMPEG_TIMEOUT = 900.0
+
+
+def _kill(proc: subprocess.Popen) -> None:
+    proc.terminate()
+    for _ in range(2):
+        try:
+            proc.communicate(timeout=3)
+            return
+        except subprocess.TimeoutExpired:
+            proc.kill()
+
+
+def _run(cmd: list[str], timeout: float = FFMPEG_TIMEOUT, cancel=None) -> subprocess.CompletedProcess:
+    """Wie subprocess.run, aber mit Zeitlimit und abbrechbar – sonst haengt der Worker unbegrenzt."""
+    try:
+        proc = subprocess.Popen(
+            cmd, stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+    except OSError as exc:
+        raise AudioError(f"{cmd[0]} konnte nicht gestartet werden: {exc}") from exc
+
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            out, err = proc.communicate(timeout=0.25)
+            return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
+        except subprocess.TimeoutExpired:
+            aborted = cancel is not None and cancel.is_set()
+            if aborted or time.monotonic() >= deadline:
+                _kill(proc)
+                if aborted:
+                    raise AudioCancelled(f"{cmd[0]} abgebrochen")
+                raise AudioError(
+                    f"{cmd[0]} hat nicht geantwortet (Zeitlimit {int(timeout)} s) – "
+                    "Datei oder Laufwerk nicht erreichbar?"
+                )
 
 
 def ffmpeg_available() -> bool:
@@ -35,10 +74,19 @@ def safe_stem(name: str) -> str:
     return stem or "Aufnahme"
 
 
+def _exists(path: Path) -> bool:
+    try:
+        return path.exists()
+    except OSError:
+        return True  # im Zweifel als belegt behandeln, statt etwas zu ueberschreiben
+
+
 def unique_path(directory: Path, stem: str, suffix: str) -> Path:
     candidate = directory / f"{stem}{suffix}"
     counter = 2
-    while candidate.exists():
+    while _exists(candidate):
+        if counter > 999:
+            raise AudioError(f"Zu viele gleichnamige Dateien in {directory}")
         candidate = directory / f"{stem} ({counter}){suffix}"
         counter += 1
     return candidate
@@ -58,11 +106,16 @@ def stage_file(source: Path, workdir: Path) -> Path:
     return target
 
 
-def duration_seconds(path: Path) -> float | None:
-    result = _run([
-        "ffprobe", "-v", "error", "-show_entries", "format=duration",
-        "-of", "json", str(path),
-    ])
+def duration_seconds(path: Path, cancel=None) -> float | None:
+    try:
+        result = _run([
+            "ffprobe", "-v", "error", "-show_entries", "format=duration",
+            "-of", "json", str(path),
+        ], timeout=120.0, cancel=cancel)
+    except AudioCancelled:
+        raise
+    except AudioError:
+        return None
     if result.returncode != 0:
         return None
     try:
@@ -73,12 +126,12 @@ def duration_seconds(path: Path) -> float | None:
     return seconds if seconds > 0 else None
 
 
-def to_wav(source: Path, target: Path) -> Path:
+def to_wav(source: Path, target: Path, cancel=None) -> Path:
     result = _run([
         "ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
         "-i", str(source), "-vn", "-sn", "-dn",
         "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", str(target),
-    ])
+    ], cancel=cancel)
     if result.returncode != 0 or not target.exists() or target.stat().st_size <= 44:
         detail = (result.stderr or "").strip().splitlines()
         message = detail[-1] if detail else f"ffmpeg beendet mit Code {result.returncode}"
@@ -112,11 +165,16 @@ def _date_from_name(name: str) -> date | None:
     return None
 
 
-def _date_from_metadata(path: Path) -> date | None:
-    result = _run([
-        "ffprobe", "-v", "error", "-show_entries", "format_tags=creation_time",
-        "-of", "json", str(path),
-    ])
+def _date_from_metadata(path: Path, cancel=None) -> date | None:
+    try:
+        result = _run([
+            "ffprobe", "-v", "error", "-show_entries", "format_tags=creation_time",
+            "-of", "json", str(path),
+        ], timeout=120.0, cancel=cancel)
+    except AudioCancelled:
+        raise
+    except AudioError:
+        return None
     if result.returncode != 0:
         return None
     try:
@@ -129,12 +187,12 @@ def _date_from_metadata(path: Path) -> date | None:
     return _valid_date(stamp.year, stamp.month, stamp.day)
 
 
-def source_date(original_name: str, media_path: Path) -> date | None:
+def source_date(original_name: str, media_path: Path, cancel=None) -> date | None:
     """Aufnahmedatum: erst aus dem Dateinamen (WhatsApp: PTT-JJJJMMTT-WAxxxx), dann Metadaten, dann mtime."""
     found = _date_from_name(original_name)
     if found:
         return found
-    found = _date_from_metadata(media_path)
+    found = _date_from_metadata(media_path, cancel=cancel)
     if found:
         return found
     try:

@@ -1,15 +1,39 @@
 """Ablauf eines Transkriptionslaufs: Dateien nach /tmp kopieren, umwandeln, transkribieren, .docx schreiben."""
 
+import atexit
+import functools
 import shutil
 import tempfile
+import time
 from pathlib import Path
 
 from . import audio, docx_writer
 from .transcriber import Cancelled, Transcriber
 
 
+WORKDIR_PREFIX = "audio_transkript_"
+
+
 class JobError(RuntimeError):
     pass
+
+
+def sweep_stale_workdirs(max_age_hours: float = 12.0) -> int:
+    """Arbeitsordner aufraeumen, die ein harter Abbruch (SIGKILL, Absturz) hinterlassen hat."""
+    cutoff = time.time() - max_age_hours * 3600.0
+    removed = 0
+    try:
+        leftovers = list(Path(tempfile.gettempdir()).glob(f"{WORKDIR_PREFIX}*"))
+    except OSError:
+        return 0
+    for leftover in leftovers:
+        try:
+            if leftover.is_dir() and leftover.stat().st_mtime < cutoff:
+                shutil.rmtree(leftover, ignore_errors=True)
+                removed += 1
+        except OSError:
+            continue
+    return removed
 
 
 def run_job(files, cfg: dict, emit, cancel, transcriber: Transcriber | None = None) -> dict:
@@ -34,7 +58,12 @@ def run_job(files, cfg: dict, emit, cancel, transcriber: Transcriber | None = No
     written: list[Path] = []
     failed: list[tuple[str, str]] = []
     cancelled = False
-    workdir = Path(tempfile.mkdtemp(prefix="audio_transkript_"))
+    workdir = Path(tempfile.mkdtemp(prefix=WORKDIR_PREFIX))
+    # Greift auch dann, wenn das Fenster mitten im Lauf geschlossen wird: der Worker
+    # ist ein Daemon-Thread und wird beim Interpreter-Shutdown abgeschnitten, das
+    # finally unten also uebersprungen. atexit laeuft davor noch.
+    cleanup = functools.partial(shutil.rmtree, workdir, ignore_errors=True)
+    atexit.register(cleanup)
     emit("log", text=f"Arbeitsordner: {workdir}")
 
     try:
@@ -70,8 +99,8 @@ def run_job(files, cfg: dict, emit, cancel, transcriber: Transcriber | None = No
             label = source.name
             emit("status", text=f"Transkribiere {done + 1}/{len(staged)}: {label}")
             try:
-                duration = audio.duration_seconds(copy)
-                wav = audio.to_wav(copy, copy.with_suffix(".16k.wav"))
+                duration = audio.duration_seconds(copy, cancel=cancel)
+                wav = audio.to_wav(copy, copy.with_suffix(".16k.wav"), cancel=cancel)
 
                 def on_progress(fraction: float, base=done) -> None:
                     emit("progress", value=(base + fraction) / len(staged) * 100.0)
@@ -80,7 +109,7 @@ def run_job(files, cfg: dict, emit, cancel, transcriber: Transcriber | None = No
                     wav, cfg["model"], cfg["language"], duration,
                     on_progress=on_progress, cancel=cancel,
                 )
-                recorded = audio.source_date(label, copy)
+                recorded = audio.source_date(label, copy, cancel=cancel)
                 stem = recorded.strftime("%d.%m.%Y") if recorded else audio.safe_stem(label)
                 target = audio.unique_path(output_dir, stem, ".docx")
                 docx_writer.write_docx(
@@ -90,16 +119,20 @@ def run_job(files, cfg: dict, emit, cancel, transcriber: Transcriber | None = No
                 written.append(target)
                 words = sum(len(text.split()) for _, _, text in result["segments"])
                 emit("log", text=f"✓ {target.name}  ({words} Wörter)")
-            except Cancelled:
+            except (Cancelled, audio.AudioCancelled):
                 cancelled = True
                 break
             except Exception as exc:
+                if cancel.is_set():
+                    cancelled = True
+                    break
                 failed.append((label, str(exc)))
                 emit("log", text=f"✗ {label}: {exc}")
             finally:
                 done += 1
                 emit("progress", value=done / max(1, len(staged)) * 100.0)
     finally:
+        atexit.unregister(cleanup)
         shutil.rmtree(workdir, ignore_errors=True)
 
     return {"written": written, "failed": failed, "cancelled": cancelled}

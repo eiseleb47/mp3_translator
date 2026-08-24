@@ -11,7 +11,7 @@ from gi.repository import Gdk, Gio, GLib, Gtk  # noqa: E402
 
 from . import config  # noqa: E402
 from .audio import AUDIO_EXTENSIONS  # noqa: E402
-from .job import JobError, run_job  # noqa: E402
+from .job import JobError, run_job, sweep_stale_workdirs  # noqa: E402
 from .transcriber import Transcriber  # noqa: E402
 
 APP_ID = "org.audiotranskript.AudioTranskript"
@@ -47,6 +47,10 @@ class Window(Gtk.ApplicationWindow):
         self.cancel = threading.Event()
         self.worker: threading.Thread | None = None
         self.transcriber = Transcriber()
+        self.settings_widgets: list[Gtk.Widget] = []
+        self.job_output_dir = self.cfg["output_dir"]
+        self.closing = False
+        self.shutdown_ticks = 0
 
         self.set_default_size(720, 540)
         self.set_size_request(600, 460)
@@ -90,6 +94,7 @@ class Window(Gtk.ApplicationWindow):
         button = Gtk.Button(label="Ändern…")
         button.connect("clicked", handler)
         grid.attach(button, 2, row, 1, 1)
+        self.settings_widgets.extend((entry, button))
         return entry
 
     def _build_settings(self) -> Gtk.Widget:
@@ -109,6 +114,7 @@ class Window(Gtk.ApplicationWindow):
         )
         self.auto_newest.connect("toggled", self.on_auto_newest_toggled)
         grid.attach(self.auto_newest, 1, 1, 2, 1)
+        self.settings_widgets.append(self.auto_newest)
         self.output_entry = self._path_row(
             grid, 2, "Transkripte speichern in:", self.cfg["output_dir"], self.on_choose_output_dir
         )
@@ -136,6 +142,7 @@ class Window(Gtk.ApplicationWindow):
         self.timestamps.set_active(self.cfg["timestamps"])
         self.timestamps.connect("toggled", lambda _w: self.save_settings())
         options.pack_start(self.timestamps, False, False, 8)
+        self.settings_widgets.extend((self.model_box, self.language_box, self.timestamps))
         return box
 
     def _build_actions(self) -> Gtk.Widget:
@@ -279,6 +286,10 @@ class Window(Gtk.ApplicationWindow):
         self.append_log(f"--- Start: {len(files)} Datei(en) ---")
 
         cfg = dict(self.cfg)
+        # Festhalten, welcher Ordner tatsaechlich benutzt wird – die Anzeige darf
+        # sich waehrend des Laufs nicht mehr aendern, sonst meldet finish() falsch.
+        self.job_output_dir = cfg["output_dir"]
+        self.set_settings_sensitive(False)
 
         def emit(kind: str, **payload) -> None:
             GLib.idle_add(self.on_event, kind, payload)
@@ -314,9 +325,14 @@ class Window(Gtk.ApplicationWindow):
             self.finish(None, payload["message"])
         return False
 
+    def set_settings_sensitive(self, sensitive: bool) -> None:
+        for widget in self.settings_widgets:
+            widget.set_sensitive(sensitive)
+
     def finish(self, summary: dict | None, error: str | None = None) -> None:
         self.select_button.set_sensitive(True)
         self.cancel_button.set_sensitive(False)
+        self.set_settings_sensitive(True)
         if error:
             self.progress.set_fraction(0.0)
             self.progress.set_show_text(False)
@@ -338,13 +354,15 @@ class Window(Gtk.ApplicationWindow):
         if written and not failed:
             self.message(
                 Gtk.MessageType.INFO,
-                f"{len(written)} Transkript(e) gespeichert in:\n{self.output_entry.get_text()}",
+                f"{len(written)} Transkript(e) gespeichert in:\n{self.job_output_dir}",
             )
         elif failed:
             details = "\n".join(f"• {name}: {reason}" for name, reason in failed[:6])
             self.message(Gtk.MessageType.WARNING, f"{text}\n\n{details}")
 
     def message(self, kind: Gtk.MessageType, text: str) -> None:
+        if self.closing:
+            return
         dialog = Gtk.MessageDialog(
             transient_for=self, modal=True, message_type=kind,
             buttons=Gtk.ButtonsType.OK, text=TITLE,
@@ -372,8 +390,25 @@ class Window(Gtk.ApplicationWindow):
             dialog.destroy()
             if answer != Gtk.ResponseType.YES:
                 return True
+            if not (self.worker and self.worker.is_alive()):
+                return False  # waehrend der Rueckfrage fertig geworden
+            # Nicht sofort zerstoeren: sonst endet die Hauptschleife, der Daemon-Thread
+            # wird abgeschnitten und sein finally raeumt den tmp-Ordner nicht mehr auf.
+            self.closing = True
             self.cancel.set()
+            self.hide()
+            self.shutdown_ticks = 0
+            GLib.timeout_add(200, self.finish_shutdown)
+            return True
         return False
+
+    def finish_shutdown(self) -> bool:
+        self.shutdown_ticks += 1
+        done = self.worker is None or not self.worker.is_alive()
+        if done or self.shutdown_ticks > 75:  # spaetestens nach 15 s aufgeben
+            self.destroy()
+            return False
+        return True
 
 
 class Application(Gtk.Application):
@@ -392,4 +427,5 @@ class Application(Gtk.Application):
 def main() -> int:
     GLib.set_prgname("audio-transkript")
     Gdk.set_program_class("Audio-Transkript")
+    sweep_stale_workdirs()  # Reste frueherer Abstuerze
     return Application().run(sys.argv[:1])
