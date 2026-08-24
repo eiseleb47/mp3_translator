@@ -112,7 +112,3 @@ Optionale Umgebungsvariablen:
 | Handy nicht im Dateidialog | `sudo apt install gvfs-backends`, Handy entsperren, MTP-Modus wählen |
 | „Audio konnte nicht dekodiert werden" | Datei ist beschädigt oder kein Audio |
 | Erster Start dauert lange | Einmaliger Modell-Download; mit `./setup.sh --prefetch` vorab holen |
-
-## Lizenz
-
-MIT
