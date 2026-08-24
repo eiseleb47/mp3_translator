@@ -3,6 +3,7 @@
 import json
 import os
 import re
+import subprocess
 import tempfile
 from pathlib import Path
 
@@ -70,11 +71,36 @@ def existing_dir(path: str) -> str:
     return str(candidate)
 
 
+def documents_dir() -> Path:
+    """Lokalisierter Dokumentenordner – auf deutschen Systemen ~/Dokumente."""
+    home = Path.home()
+    base = os.environ.get("XDG_CONFIG_HOME") or str(home / ".config")
+    try:
+        for line in (Path(base) / "user-dirs.dirs").read_text(encoding="utf-8").splitlines():
+            if line.startswith("XDG_DOCUMENTS_DIR="):
+                raw = line.split("=", 1)[1].strip().strip('"').replace("$HOME", str(home))
+                candidate = Path(raw)
+                if candidate.is_absolute() and candidate != home:
+                    return candidate
+    except (OSError, ValueError):
+        pass
+    try:
+        result = subprocess.run(
+            ["xdg-user-dir", "DOCUMENTS"], capture_output=True, text=True, timeout=5
+        )
+        candidate = Path(result.stdout.strip())
+        if result.returncode == 0 and candidate.is_absolute() and candidate != home:
+            return candidate
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return home / "Documents"
+
+
 def defaults() -> dict:
     home = Path.home()
     return {
         "start_dir": str(home),
-        "output_dir": str(home / "Documents" / "audio_texte"),
+        "output_dir": str(documents_dir() / "audio_texte"),
         "model": "small",
         "language": "auto",
         "timestamps": False,

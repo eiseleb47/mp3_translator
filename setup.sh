@@ -41,10 +41,15 @@ if [[ $EUID -ne 0 ]]; then
 fi
 
 install_system_deps() {
+  if [[ $EUID -ne 0 && -z "$SUDO" ]]; then
+    die "Für die Systempakete werden Root-Rechte gebraucht, aber sudo fehlt.
+    Entweder als root ausführen oder './setup.sh --no-system-deps' verwenden."
+  fi
   if command -v apt-get >/dev/null 2>&1; then
     say "Systempakete via apt (Linux Mint / Ubuntu / Debian)"
-    $SUDO apt-get update
-    $SUDO apt-get install -y python3 python3-venv python3-gi gir1.2-gtk-3.0 ffmpeg gvfs-backends
+    # Eine einzelne unerreichbare Paketquelle darf das Setup nicht beenden.
+    $SUDO apt-get update || warn "apt-get update meldete Fehler – Installation wird trotzdem versucht."
+    $SUDO apt-get install -y python3 python3-venv python3-gi gir1.2-gtk-3.0 ffmpeg gvfs-fuse gvfs-backends
   elif command -v pacman >/dev/null 2>&1; then
     say "Systempakete via pacman (Arch / Garuda / Manjaro)"
     $SUDO pacman -S --needed --noconfirm python python-gobject gtk3 ffmpeg
@@ -59,16 +64,24 @@ install_system_deps() {
   fi
 }
 
+install_system_deps_or_hint() {
+  if ! install_system_deps; then
+    die "Systempakete konnten nicht installiert werden.
+    Sind ffmpeg, python3-gi und gir1.2-gtk-3.0 bereits vorhanden, hilft:
+    ./setup.sh --no-system-deps"
+  fi
+}
+
 if [[ $SKIP_SYSTEM -eq 0 ]]; then
-  install_system_deps
+  install_system_deps_or_hint
 else
   say "Systempakete übersprungen"
 fi
 
 command -v python3 >/dev/null 2>&1 || die "python3 nicht gefunden."
-python3 - <<'PY' || die "Python 3.9 oder neuer wird benötigt."
+python3 - <<'PY' || die "Python 3.10 oder neuer wird benötigt (der Code nutzt PEP-604-Annotationen)."
 import sys
-raise SystemExit(0 if sys.version_info >= (3, 9) else 1)
+raise SystemExit(0 if sys.version_info >= (3, 10) else 1)
 PY
 
 say "Virtuelle Umgebung: $VENV"
@@ -87,8 +100,8 @@ say "Python-Pakete installieren"
 "$VENV/bin/python" -m pip install -r "$DIR/requirements.txt"
 
 say "Prüfung"
-"$VENV/bin/python" - <<'PY' || die "Prüfung fehlgeschlagen – siehe Meldung oben."
-import shutil, sys
+AUDIO_TRANSKRIPT_DIR="$DIR" "$VENV/bin/python" - <<'PY' || die "Prüfung fehlgeschlagen – siehe Meldung oben."
+import os, shutil, sys
 problems = []
 try:
     import gi
@@ -96,7 +109,8 @@ try:
     from gi.repository import Gtk  # noqa: F401
 except Exception as exc:
     problems.append(f"PyGObject/GTK3 fehlt ({exc}). Auf Mint/Ubuntu: sudo apt install python3-gi gir1.2-gtk-3.0")
-for module in ("faster_whisper", "docx"):
+sys.path.insert(0, os.environ.get("AUDIO_TRANSKRIPT_DIR", "."))
+for module in ("faster_whisper", "docx", "audio_transkript.gui"):
     try:
         __import__(module)
     except Exception as exc:
@@ -108,7 +122,7 @@ for problem in problems:
     print("  ✗", problem, file=sys.stderr)
 raise SystemExit(1 if problems else 0)
 PY
-echo "  ✓ GTK3, faster-whisper, python-docx, ffmpeg vorhanden"
+echo "  ✓ GTK3, faster-whisper, python-docx, ffmpeg und das Programm selbst laden"
 
 chmod +x "$DIR/run.sh"
 
@@ -160,7 +174,9 @@ if [[ $DESKTOP_ICON -eq 1 ]]; then
   fi
 fi
 
-mkdir -p "$HOME/Documents/audio_texte"
+DOCS="$(xdg-user-dir DOCUMENTS 2>/dev/null || true)"
+[[ -n "$DOCS" && "$DOCS" != "$HOME" ]] || DOCS="$HOME/Documents"
+mkdir -p "$DOCS/audio_texte"
 
 if [[ -n "$PREFETCH" ]]; then
   say "Modell '$PREFETCH' herunterladen"

@@ -76,7 +76,7 @@ def run_job(files, cfg: dict, emit, cancel, transcriber: Transcriber | None = No
             emit("status", text=f"Kopiere {index}/{total}: {source.name}")
             try:
                 staged.append((source, audio.stage_file(source, workdir)))
-            except audio.AudioError as exc:
+            except (audio.AudioError, OSError) as exc:
                 failed.append((source.name, str(exc)))
                 emit("log", text=f"✗ {source.name}: {exc}")
 

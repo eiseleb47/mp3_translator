@@ -1,9 +1,19 @@
 """Baut aus Whisper-Segmenten Absätze und schreibt sie als .docx (OnlyOffice-kompatibel)."""
 
+import os
+import re
+import tempfile
 from datetime import datetime
 from pathlib import Path
 
 from .audio import format_duration
+
+# lxml lehnt C0-Steuerzeichen ab; Tab und Zeilenumbruch sind erlaubt.
+CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+
+def xml_safe(text: str) -> str:
+    return CONTROL_CHARS.sub("", text)
 
 PARAGRAPH_GAP = 1.5
 SOFT_LIMIT = 400
@@ -110,7 +120,7 @@ def write_docx(target: Path, title: str, result: dict, source_name: str,
     document.styles["Normal"].font.size = Pt(11)
     document.styles["Normal"].paragraph_format.space_after = Pt(8)
 
-    document.add_heading(title, level=1)
+    document.add_heading(xml_safe(title), level=1)
 
     code = result.get("language")
     language_label = LANGUAGE_NAMES.get(code, code or "unbekannt")
@@ -125,7 +135,7 @@ def write_docx(target: Path, title: str, result: dict, source_name: str,
         f"Erstellt: {datetime.now().strftime('%d.%m.%Y %H:%M')}"
     )
     meta = document.add_paragraph()
-    run = meta.add_run(info)
+    run = meta.add_run(xml_safe(info))
     run.italic = True
     run.font.size = Pt(8)
 
@@ -137,8 +147,20 @@ def write_docx(target: Path, title: str, result: dict, source_name: str,
         if with_timestamps:
             stamp = paragraph.add_run(f"{timestamp(start)} ")
             stamp.bold = True
-        paragraph.add_run(text)
+        paragraph.add_run(xml_safe(text))
 
     target.parent.mkdir(parents=True, exist_ok=True)
-    document.save(str(target))
+    # Erst vollständig danebenschreiben, dann umbenennen: bricht das Speichern ab
+    # (z.B. volle Platte), bleibt keine halbe .docx mit gültigem Namen zurück.
+    handle, tmp = tempfile.mkstemp(dir=target.parent, prefix=".docx-", suffix=".tmp")
+    os.close(handle)
+    try:
+        document.save(tmp)
+        os.replace(tmp, target)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
     return target

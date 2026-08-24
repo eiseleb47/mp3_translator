@@ -38,7 +38,9 @@ Das Schreibtisch-Symbol wird ausführbar gesetzt und per `gio set … metadata::
 als vertrauenswürdig markiert. Zeigt der Dateimanager es trotzdem als nicht startbar an:
 Rechtsklick → „Starten erlauben".
 
-Getestet auf Linux Mint (apt) und Arch/Garuda (pacman); dnf und zypper werden ebenfalls erkannt.
+Benötigt Python 3.10 oder neuer. Getestet auf Linux Mint (apt) und Arch/Garuda (pacman);
+dnf und zypper werden ebenfalls erkannt. Schlägt die Paketinstallation fehl, obwohl alles
+Nötige vorhanden ist, hilft `./setup.sh --no-system-deps`.
 
 ## Benutzung
 
@@ -48,7 +50,8 @@ Start über das Symbol auf dem Schreibtisch, das Anwendungsmenü oder `./run.sh`
 2. **Automatisch in den neuesten Wochenordner** — WhatsApp legt Sprachnachrichten in Wochenordnern
    ab (`202634` = KW 34/2026). Ist die Option aktiv, springt der Dialog automatisch in den
    höchsten Wochenordner. Für einen festen Ordner (z. B. eine eigene Kopie) einfach abschalten.
-3. **Transkripte speichern in** — Zielordner, Standard `~/Documents/audio_texte`.
+3. **Transkripte speichern in** — Zielordner, standardmäßig `audio_texte` im
+   Dokumentenordner des Systems (auf deutschen Systemen also `~/Dokumente/audio_texte`).
 4. **Modell / Sprache / Zeitmarken** — siehe unten.
 5. **Audiodateien auswählen…** — Mehrfachauswahl möglich; die Transkription startet sofort.
 
@@ -116,5 +119,8 @@ Optionale Umgebungsvariablen:
 | „ffmpeg wurde nicht gefunden" | `sudo apt install ffmpeg` |
 | „PyGObject/GTK3 fehlt" | `sudo apt install python3-gi gir1.2-gtk-3.0`, danach `./setup.sh` |
 | Handy nicht im Dateidialog | `sudo apt install gvfs-backends`, Handy entsperren, MTP-Modus wählen |
+| „Datei nicht direkt lesbar" beim Auswählen | `sudo apt install gvfs-fuse`, danach Handy neu anstecken |
+| Start über das Symbol tut nichts | Fehlermeldung erscheint jetzt als Dialog; Details in `~/.cache/audio-transkript.log` |
+| „Kopie unvollständig" | Übertragung vom Gerät abgebrochen — Kabel prüfen und Datei erneut auswählen |
 | „Audio konnte nicht dekodiert werden" | Datei ist beschädigt oder kein Audio |
 | Erster Start dauert lange | Einmaliger Modell-Download; mit `./setup.sh --prefetch` vorab holen |

@@ -269,11 +269,35 @@ class Window(Gtk.ApplicationWindow):
         dialog.add_filter(all_filter)
 
         files: list[str] = []
-        if dialog.run() == Gtk.ResponseType.ACCEPT:
-            files = dialog.get_filenames()
+        skipped: list[str] = []
+        accepted = dialog.run() == Gtk.ResponseType.ACCEPT
+        if accepted:
+            # get_filenames() verwirft Auswahlen ohne lokalen Pfad kommentarlos.
+            # Über die GFile-Liste sehen wir, was fehlt, und können es benennen.
+            for gfile in dialog.get_files():
+                path = gfile.get_path()
+                if path:
+                    files.append(path)
+                else:
+                    skipped.append(gfile.get_basename() or gfile.get_uri())
         dialog.destroy()
+
+        if skipped:
+            names = "\n".join(f"• {name}" for name in skipped[:6])
+            if len(skipped) > 6:
+                names += f"\n… und {len(skipped) - 6} weitere"
+            self.append_log(f"✗ {len(skipped)} Datei(en) ohne lokalen Pfad übersprungen")
+            self.message(
+                Gtk.MessageType.WARNING,
+                f"{len(skipped)} Datei(en) sind nicht direkt lesbar und werden "
+                f"übersprungen:\n{names}\n\n"
+                "Das passiert bei Geräten, die nicht ins Dateisystem eingebunden sind. "
+                "Auf Linux Mint hilft meist:\nsudo apt install gvfs-fuse",
+            )
         if files:
             self.start(files)
+        elif accepted and not skipped:
+            self.append_log("Keine Dateien ausgewählt.")
 
     def start(self, files: list[str]) -> None:
         self.cancel.clear()

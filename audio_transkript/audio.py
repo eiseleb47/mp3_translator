@@ -96,13 +96,33 @@ def stage_file(source: Path, workdir: Path) -> Path:
     """Kopiert die Quelldatei (z.B. vom Handy via MTP) in den Arbeitsordner."""
     target = unique_path(workdir, safe_stem(source.name), source.suffix.lower() or ".bin")
     try:
-        shutil.copyfile(source, target)
+        # Vor dem Kopieren lesen: danach kann das Gerät bereits abgesteckt sein.
         stat = source.stat()
-        os.utime(target, (stat.st_atime, stat.st_mtime))
+    except OSError as exc:
+        raise AudioError(f"Datei nicht lesbar: {exc}") from exc
+
+    try:
+        shutil.copyfile(source, target)
     except OSError as exc:
         raise AudioError(f"Datei konnte nicht kopiert werden: {exc}") from exc
-    if target.stat().st_size == 0:
+
+    try:
+        copied = target.stat().st_size
+    except OSError as exc:
+        raise AudioError(f"Kopie konnte nicht geprüft werden: {exc}") from exc
+
+    if copied == 0:
         raise AudioError("Datei ist leer (0 Bytes).")
+    if stat.st_size and copied != stat.st_size:
+        raise AudioError(
+            f"Kopie unvollständig ({copied} von {stat.st_size} Bytes) – "
+            "Verbindung zum Gerät unterbrochen?"
+        )
+
+    try:
+        os.utime(target, (stat.st_atime, stat.st_mtime))
+    except OSError:
+        pass  # betrifft nur das Datum als Rückfallebene, die Kopie selbst ist in Ordnung
     return target
 
 
