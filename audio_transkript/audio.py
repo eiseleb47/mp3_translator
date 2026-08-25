@@ -1,4 +1,4 @@
-"""Kopiert Audiodateien in einen tmp-Ordner und wandelt sie via ffmpeg in 16-kHz-Mono-WAV um."""
+"""Sichert Audiodateien im Audioordner und wandelt sie via ffmpeg in 16-kHz-Mono-WAV um."""
 
 import json
 import os
@@ -92,14 +92,73 @@ def unique_path(directory: Path, stem: str, suffix: str) -> Path:
     return candidate
 
 
-def stage_file(source: Path, workdir: Path) -> Path:
-    """Kopiert die Quelldatei (z.B. vom Handy via MTP) in den Arbeitsordner."""
-    target = unique_path(workdir, safe_stem(source.name), source.suffix.lower() or ".bin")
+# Container-Kopf und erste Audioframes reichen, um zwei verschiedene Aufnahmen zu
+# unterscheiden. Mehr zu lesen wuerde das Sichern vom Handy unnoetig ausbremsen.
+PROBE_BYTES = 64 * 1024
+
+
+def same_head(first: Path, second: Path, length: int) -> bool:
+    """Stimmen die ersten Bytes beider Dateien überein? Trennt Dubletten von bloß Namensgleichen."""
+    limit = min(max(0, length), PROBE_BYTES)
+    if limit == 0:
+        return False
+    try:
+        with open(first, "rb") as one, open(second, "rb") as two:
+            return one.read(limit) == two.read(limit)
+    except OSError:
+        return False
+
+
+def _size_of(path: Path) -> int:
+    try:
+        return path.stat().st_size
+    except OSError:
+        return 0
+
+
+def existing_copy(directory: Path, stem: str, suffix: str, source: Path, size: int) -> Path | None:
+    """Sucht 'stem.ext', 'stem (2).ext', … nach einer Sicherung derselben Datei ab."""
+    candidate = directory / f"{stem}{suffix}"
+    counter = 2
+    while _exists(candidate):
+        present = _size_of(candidate)
+        # size == 0 melden manche MTP-Mounts auch für gefüllte Dateien – dann zaehlt nur der Inhalt.
+        if present > 0 and size in (0, present) and same_head(source, candidate, present):
+            return candidate
+        if counter > 999:
+            return None
+        candidate = directory / f"{stem} ({counter}){suffix}"
+        counter += 1
+    return None
+
+
+def _in_dir(path: Path, directory: Path) -> bool:
+    """Liegt path direkt in directory? Aufgeloest, damit Symlinks und '..' nicht taeuschen."""
+    try:
+        return path.parent.resolve() == directory.resolve()
+    except OSError:
+        return False
+
+
+def archive_file(source: Path, archive_dir: Path) -> Path:
+    """Legt die Quelldatei (z.B. vom Handy via MTP) im Audioordner ab und gibt den Pfad dort zurück."""
     try:
         # Vor dem Kopieren lesen: danach kann das Gerät bereits abgesteckt sein.
         stat = source.stat()
     except OSError as exc:
         raise AudioError(f"Datei nicht lesbar: {exc}") from exc
+
+    if _in_dir(source, archive_dir):
+        if stat.st_size == 0:
+            raise AudioError("Datei ist leer (0 Bytes).")
+        return source  # liegt schon im Audioordner – nichts zu kopieren
+
+    stem = safe_stem(source.name)
+    suffix = source.suffix.lower() or ".bin"
+    found = existing_copy(archive_dir, stem, suffix, source, stat.st_size)
+    if found is not None:
+        return found  # identische Sicherung schon vorhanden
+    target = unique_path(archive_dir, stem, suffix)
 
     try:
         shutil.copyfile(source, target)
@@ -111,9 +170,13 @@ def stage_file(source: Path, workdir: Path) -> Path:
     except OSError as exc:
         raise AudioError(f"Kopie konnte nicht geprüft werden: {exc}") from exc
 
-    if copied == 0:
-        raise AudioError("Datei ist leer (0 Bytes).")
-    if stat.st_size and copied != stat.st_size:
+    if copied == 0 or (stat.st_size and copied != stat.st_size):
+        try:
+            target.unlink()  # keine halbe Sicherung im Audioordner zurücklassen
+        except OSError:
+            pass
+        if copied == 0:
+            raise AudioError("Datei ist leer (0 Bytes).")
         raise AudioError(
             f"Kopie unvollständig ({copied} von {stat.st_size} Bytes) – "
             "Verbindung zum Gerät unterbrochen?"

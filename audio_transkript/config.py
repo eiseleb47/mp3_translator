@@ -1,8 +1,8 @@
 """Persistente Einstellungen in ~/.config/audio-transkript/config.json."""
 
+import functools
 import json
 import os
-import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -38,29 +38,12 @@ def config_path() -> Path:
     return config_dir() / "config.json"
 
 
-def is_week_dir(name: str) -> bool:
-    """WhatsApp legt Medien in Wochenordnern JJJJWW ab (z.B. 202634 = KW 34/2026)."""
-    if len(name) != 6 or not name.isdigit():
-        return False
-    return 2000 <= int(name[:4]) <= 2999 and 1 <= int(name[4:]) <= 53
-
-
 def is_dir(path) -> bool:
     """Path.is_dir() reicht vor Python 3.13 EACCES/ENOTCONN durch – etwa bei totem MTP-Mount."""
     try:
         return Path(path).expanduser().is_dir()
     except OSError:
         return False
-
-
-def newest_week_dir(path: str) -> str:
-    """Höchster Wochenordner unterhalb von path, sonst path selbst."""
-    base = Path(existing_dir(path))
-    try:
-        weeks = [d for d in base.iterdir() if is_dir(d) and is_week_dir(d.name)]
-    except OSError:
-        return str(base)
-    return str(max(weeks, key=lambda d: d.name)) if weeks else str(base)
 
 
 def existing_dir(path: str) -> str:
@@ -71,6 +54,7 @@ def existing_dir(path: str) -> str:
     return str(candidate)
 
 
+@functools.lru_cache(maxsize=1)
 def documents_dir() -> Path:
     """Lokalisierter Dokumentenordner – auf deutschen Systemen ~/Dokumente."""
     home = Path.home()
@@ -96,16 +80,18 @@ def documents_dir() -> Path:
     return home / "Documents"
 
 
+def audio_dir() -> Path:
+    """Fester Ablageort der Audiodateien – auf deutschen Systemen ~/Dokumente/audio_dateien."""
+    return documents_dir() / "audio_dateien"
+
+
 def defaults() -> dict:
-    home = Path.home()
     return {
-        "start_dir": str(home),
         "whatsapp_dir": "",
         "output_dir": str(documents_dir() / "audio_texte"),
         "model": "small",
         "language": "auto",
         "timestamps": False,
-        "auto_newest": True,
     }
 
 
@@ -113,10 +99,9 @@ def _clean(raw: dict) -> dict:
     cfg = defaults()
     if not isinstance(raw, dict):
         return cfg
-    for key in ("start_dir", "output_dir"):
-        value = raw.get(key)
-        if isinstance(value, str) and value.strip():
-            cfg[key] = str(Path(value).expanduser())
+    value = raw.get("output_dir")
+    if isinstance(value, str) and value.strip():
+        cfg["output_dir"] = str(Path(value).expanduser())
     # Darf leer bleiben: solange nicht eingestellt, fragt der Knopf beim ersten Klick.
     value = raw.get("whatsapp_dir")
     if isinstance(value, str):
@@ -125,9 +110,8 @@ def _clean(raw: dict) -> dict:
         cfg["model"] = raw["model"]
     if raw.get("language") in {code for code, _ in LANGUAGES}:
         cfg["language"] = raw["language"]
-    for key in ("timestamps", "auto_newest"):
-        if isinstance(raw.get(key), bool):
-            cfg[key] = raw[key]
+    if isinstance(raw.get("timestamps"), bool):
+        cfg["timestamps"] = raw["timestamps"]
     return cfg
 
 

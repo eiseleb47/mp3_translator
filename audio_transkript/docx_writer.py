@@ -127,6 +127,7 @@ def write_docx(target: Path, title: str, result: dict, source_name: str,
     probability = result.get("language_probability")
     if isinstance(probability, (int, float)):
         language_label += f" ({probability * 100:.0f} %)"
+    # job.transcribed_sources() liest 'Quelle: … · Dauer:' hier wieder heraus – Format nicht ändern.
     info = (
         f"Quelle: {source_name}  ·  "
         f"Dauer: {format_duration(result.get('duration'))}  ·  "

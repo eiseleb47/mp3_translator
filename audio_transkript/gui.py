@@ -49,6 +49,11 @@ class Window(Gtk.ApplicationWindow):
         self.transcriber = Transcriber()
         self.settings_widgets: list[Gtk.Widget] = []
         self.job_output_dir = self.cfg["output_dir"]
+        self.audio_dir = config.audio_dir()
+        try:
+            self.audio_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            print(f"Audioordner konnte nicht angelegt werden: {exc}", file=sys.stderr)
         self.closing = False
         self.shutdown_ticks = 0
 
@@ -69,7 +74,6 @@ class Window(Gtk.ApplicationWindow):
         outer.pack_start(self._build_log(), True, True, 0)
 
         self.connect("delete-event", self.on_delete)
-        self.refresh_start_tooltip()
         self.select_button.grab_focus()
         self.save_settings()
 
@@ -85,13 +89,14 @@ class Window(Gtk.ApplicationWindow):
     def _label(text: str) -> Gtk.Label:
         return Gtk.Label(label=text, xalign=0.0)
 
-    def _path_row(self, grid: Gtk.Grid, row: int, text: str, value: str, handler):
+    def _path_row(self, grid: Gtk.Grid, row: int, text: str, value: str, handler,
+                  button_label: str = "Ändern…"):
         grid.attach(self._label(text), 0, row, 1, 1)
         entry = Gtk.Entry(text=value, hexpand=True)
         entry.set_editable(False)
         entry.set_tooltip_text(value)
         grid.attach(entry, 1, row, 1, 1)
-        button = Gtk.Button(label="Ändern…")
+        button = Gtk.Button(label=button_label)
         button.connect("clicked", handler)
         grid.attach(button, 2, row, 1, 1)
         self.settings_widgets.extend((entry, button))
@@ -103,29 +108,25 @@ class Window(Gtk.ApplicationWindow):
 
         grid = Gtk.Grid(row_spacing=8, column_spacing=10)
         box.pack_start(grid, False, False, 0)
-        self.start_entry = self._path_row(
-            grid, 0, "Dateiauswahl startet in:", self.cfg["start_dir"], self.on_choose_start_dir
-        )
-        self.auto_newest = Gtk.CheckButton(label="Automatisch in den neuesten Wochenordner (z. B. 202634)")
-        self.auto_newest.set_active(self.cfg["auto_newest"])
-        self.auto_newest.set_tooltip_text(
-            "WhatsApp legt Sprachnachrichten in Wochenordnern ab.\n"
-            "Abschalten, wenn der Dialog immer genau im oben gewählten Ordner öffnen soll."
-        )
-        self.auto_newest.connect("toggled", self.on_auto_newest_toggled)
-        grid.attach(self.auto_newest, 1, 1, 2, 1)
-        self.settings_widgets.append(self.auto_newest)
         self.whatsapp_entry = self._path_row(
-            grid, 2, "WhatsApp-Ordner am Handy:", self.cfg["whatsapp_dir"],
+            grid, 0, "WhatsApp-Ordner am Handy:", self.cfg["whatsapp_dir"],
             self.on_choose_whatsapp_dir,
         )
         self.whatsapp_entry.set_placeholder_text("noch nicht eingestellt")
+        self.audio_entry = self._path_row(
+            grid, 1, "Audiodateien liegen in:", str(self.audio_dir),
+            self.on_open_audio, button_label="Öffnen",
+        )
+        self.audio_entry.set_tooltip_text(
+            f"{self.audio_dir}\n"
+            "Fester Ordner: „Vom Handy sichern“ legt hier ab, und der Dateidialog öffnet hier."
+        )
         self.output_entry = self._path_row(
-            grid, 3, "Transkripte speichern in:", self.cfg["output_dir"], self.on_choose_output_dir
+            grid, 2, "Transkripte speichern in:", self.cfg["output_dir"], self.on_choose_output_dir
         )
 
         options = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        grid.attach(options, 0, 4, 3, 1)
+        grid.attach(options, 0, 3, 3, 1)
         options.pack_start(self._label("Modell:"), False, False, 0)
         self.model_box = Gtk.ComboBoxText()
         for name in config.MODELS:
@@ -158,8 +159,8 @@ class Window(Gtk.ApplicationWindow):
         self.copy_button = Gtk.Button(label="Vom Handy sichern")
         self.copy_button.set_size_request(-1, 42)
         self.copy_button.set_tooltip_text(
-            "Kopiert alle Sprachnachrichten aus dem WhatsApp-Ordner des Handys in den "
-            "oben eingestellten Startordner.\nBereits vorhandene Dateien werden übersprungen."
+            "Kopiert alle Sprachnachrichten aus dem WhatsApp-Ordner des Handys nach\n"
+            f"{self.audio_dir}.\nBereits vorhandene Dateien werden übersprungen."
         )
         self.copy_button.connect("clicked", self.on_copy_clicked)
         row.pack_start(self.copy_button, False, False, 0)
@@ -201,13 +202,11 @@ class Window(Gtk.ApplicationWindow):
     def save_settings(self) -> None:
         codes = [code for code, _label in config.LANGUAGES]
         self.cfg = {
-            "start_dir": self.start_entry.get_text(),
             "whatsapp_dir": self.whatsapp_entry.get_text(),
             "output_dir": self.output_entry.get_text(),
             "model": config.MODELS[self.model_box.get_active()],
             "language": codes[self.language_box.get_active()],
             "timestamps": self.timestamps.get_active(),
-            "auto_newest": self.auto_newest.get_active(),
         }
         try:
             config.save(self.cfg)
@@ -229,38 +228,24 @@ class Window(Gtk.ApplicationWindow):
                 self.save_settings()
         dialog.destroy()
 
-    def dialog_start_folder(self) -> str:
-        pinned = self.start_entry.get_text()
-        if self.auto_newest.get_active():
-            return config.newest_week_dir(pinned)
-        return config.existing_dir(pinned)
-
-    def on_auto_newest_toggled(self, _button) -> None:
-        self.save_settings()
-        self.refresh_start_tooltip()
-
-    def refresh_start_tooltip(self) -> None:
-        pinned = self.start_entry.get_text()
-        target = self.dialog_start_folder()
-        text = pinned if target == pinned else f"{pinned}\nDialog öffnet in: {target}"
-        self.start_entry.set_tooltip_text(text)
-
-    def on_choose_start_dir(self, _button) -> None:
-        self._choose_folder("Startordner für die Dateiauswahl", self.start_entry)
-        self.refresh_start_tooltip()
-
     def on_choose_whatsapp_dir(self, _button) -> None:
         self._choose_folder("WhatsApp-Ordner am Handy", self.whatsapp_entry)
 
     def on_choose_output_dir(self, _button) -> None:
         self._choose_folder("Zielordner für die Transkripte", self.output_entry)
 
-    def on_open_output(self, _button) -> None:
-        target = config.existing_dir(self.output_entry.get_text())
+    def _open_folder(self, path: str) -> None:
+        target = config.existing_dir(path)
         try:
             Gio.AppInfo.launch_default_for_uri(Gio.File.new_for_path(target).get_uri(), None)
         except GLib.Error as exc:
             self.message(Gtk.MessageType.ERROR, f"Ordner konnte nicht geöffnet werden:\n{exc.message}")
+
+    def on_open_output(self, _button) -> None:
+        self._open_folder(self.output_entry.get_text())
+
+    def on_open_audio(self, _button) -> None:
+        self._open_folder(str(self.audio_dir))
 
     # ---------- Ablauf ----------
 
@@ -272,7 +257,7 @@ class Window(Gtk.ApplicationWindow):
         )
         dialog.add_buttons("_Abbrechen", Gtk.ResponseType.CANCEL, "_Öffnen", Gtk.ResponseType.ACCEPT)
         dialog.set_select_multiple(True)
-        dialog.set_current_folder(self.dialog_start_folder())
+        dialog.set_current_folder(config.existing_dir(str(self.audio_dir)))
 
         audio_filter = Gtk.FileFilter()
         audio_filter.set_name("Audiodateien")
@@ -333,7 +318,7 @@ class Window(Gtk.ApplicationWindow):
             source = self.whatsapp_entry.get_text().strip()
             if not config.is_dir(source):
                 return
-        self.start_copy(source, self.start_entry.get_text())
+        self.start_copy(source, str(self.audio_dir))
 
     def begin_run(self, status: str) -> None:
         self.cancel.clear()
@@ -448,8 +433,10 @@ class Window(Gtk.ApplicationWindow):
             self.message(Gtk.MessageType.ERROR, error)
             return
 
-        written, failed = summary["written"], summary["failed"]
+        written, failed, skipped = summary["written"], summary["failed"], summary["skipped"]
         parts = [f"{len(written)} Transkript(e) erstellt"]
+        if skipped:
+            parts.append(f"{len(skipped)} schon transkribiert")
         if failed:
             parts.append(f"{len(failed)} fehlgeschlagen")
         if summary["cancelled"]:
@@ -458,14 +445,20 @@ class Window(Gtk.ApplicationWindow):
         self.set_status(text)
         self.append_log(f"--- Fertig: {text} ---")
 
-        if written and not failed:
+        if failed:
+            details = "\n".join(f"• {name}: {reason}" for name, reason in failed[:6])
+            self.message(Gtk.MessageType.WARNING, f"{text}\n\n{details}")
+        elif written:
             self.message(
                 Gtk.MessageType.INFO,
                 f"{len(written)} Transkript(e) gespeichert in:\n{self.job_output_dir}",
             )
-        elif failed:
-            details = "\n".join(f"• {name}: {reason}" for name, reason in failed[:6])
-            self.message(Gtk.MessageType.WARNING, f"{text}\n\n{details}")
+        elif skipped and not summary["cancelled"]:
+            self.message(
+                Gtk.MessageType.INFO,
+                f"Alle {len(skipped)} ausgewählten Datei(en) wurden schon früher transkribiert "
+                f"und daher übersprungen.\n\nDie Transkripte liegen in:\n{self.job_output_dir}",
+            )
 
     def message(self, kind: Gtk.MessageType, text: str) -> None:
         if self.closing:

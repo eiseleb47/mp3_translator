@@ -46,30 +46,42 @@ Nötige vorhanden ist, hilft `./setup.sh --no-system-deps`.
 
 Start über das Symbol auf dem Schreibtisch, das Anwendungsmenü oder `./run.sh`.
 
-1. **Dateiauswahl startet in** — Ordner, in dem der Dateidialog öffnet. Bleibt dauerhaft
-   gespeichert. Das ist zugleich der Zielordner von „Vom Handy sichern".
-2. **Automatisch in den neuesten Wochenordner** — WhatsApp legt Sprachnachrichten in Wochenordnern
-   ab (`202634` = KW 34/2026). Ist die Option aktiv, springt der Dialog automatisch in den
-   höchsten Wochenordner. Für einen festen Ordner (z. B. eine eigene Kopie) einfach abschalten.
-3. **WhatsApp-Ordner am Handy** — Quelle für „Vom Handy sichern", siehe unten.
-4. **Transkripte speichern in** — Zielordner, standardmäßig `audio_texte` im
+1. **WhatsApp-Ordner am Handy** — Quelle für „Vom Handy sichern", siehe unten.
+2. **Audiodateien liegen in** — fester Ordner `audio_dateien` im Dokumentenordner des Systems
+   (auf deutschen Systemen also `~/Dokumente/audio_dateien`). Dort landet alles, was „Vom Handy
+   sichern" holt, und dort öffnet auch der Dateidialog. Der Knopf „Öffnen" zeigt ihn im Dateimanager.
+3. **Transkripte speichern in** — Zielordner, standardmäßig `audio_texte` im
    Dokumentenordner des Systems (auf deutschen Systemen also `~/Dokumente/audio_texte`).
-5. **Modell / Sprache / Zeitmarken** — siehe unten.
-6. **Audiodateien auswählen…** — Mehrfachauswahl möglich; die Transkription startet sofort.
+4. **Modell / Sprache / Zeitmarken** — siehe unten.
+5. **Audiodateien auswählen…** — Mehrfachauswahl möglich; die Transkription startet sofort.
 
-Ausgewählte Dateien werden zuerst nach `/tmp/audio_transkript_*` kopiert und von dort verarbeitet.
-Das Handy kann also direkt nach dem Kopieren abgesteckt werden. Der tmp-Ordner wird danach gelöscht.
+Ausgewählte Dateien werden zuerst nach `~/Dokumente/audio_dateien` kopiert und von dort verarbeitet.
+Das Handy kann also direkt nach dem Kopieren abgesteckt werden. Anders als früher bleiben die
+Audiodateien dort liegen — nur die 16-kHz-Zwischendateien landen in `/tmp` und werden gelöscht.
+Dateien, die bereits in `audio_dateien` liegen, werden nicht noch einmal kopiert.
+
+### Schon transkribierte Dateien werden übersprungen
+
+Vor jedem Lauf liest das Programm die vorhandenen `.docx` im Zielordner (samt Unterordnern) und
+vergleicht die dort in der Kopfzeile vermerkte **Quelle** mit den ausgewählten Dateien. Was schon
+einmal transkribiert wurde, wird übersprungen und im Protokoll mit `⏭` samt Namen des vorhandenen
+Transkripts vermerkt. Man kann also gefahrlos den ganzen Ordner markieren — es läuft nur das Neue.
+
+Soll eine Datei doch noch einmal transkribiert werden (z. B. mit einem größeren Modell), muss das
+alte Transkript vorher aus dem Zielordner entfernt oder verschoben werden.
 
 ### Vom Handy sichern
 
 WhatsApp löscht Sprachnachrichten nach etwa einer Woche aus seinem Medienordner. Der Knopf
 **„Vom Handy sichern"** kopiert sie vorher in Sicherheit: er durchsucht den eingestellten
 WhatsApp-Ordner samt aller Wochenordner (`202634`, `202635`, …) und legt jede Audiodatei
-flach im **Startordner** ab.
+flach in `~/Dokumente/audio_dateien` ab.
 
 - Bereits vorhandene Dateien werden übersprungen — der Knopf lässt sich also täglich drücken,
   ohne Dubletten zu erzeugen.
 - Eine Datei, die beim letzten Mal unvollständig ankam, wird erkannt und erneut geholt.
+- Eine gleichnamige, aber inhaltlich andere Aufnahme überschreibt die vorhandene nicht,
+  sondern wird durchgezählt abgelegt (`PTT-… (2).opus`).
 - Der Lauf zeigt Fortschritt und lässt sich mit „Abbrechen" stoppen.
 
 Quelle ist üblicherweise:
@@ -78,9 +90,7 @@ Quelle ist üblicherweise:
 Android/media/com.whatsapp/WhatsApp/Media/WhatsApp Voice Notes
 ```
 
-Liegt der Startordner ebenfalls auf dem Handy, läuft die Kopie technisch bedingt über den PC —
-MTP kann nicht auf dem Gerät selbst kopieren. Jede Datei wandert also zweimal über das Kabel.
-Ein Startordner auf dem PC ist entsprechend schneller.
+Der Zielordner liegt immer auf dem PC, jede Datei wandert also genau einmal über das Kabel.
 
 ### Benennung der Transkripte
 
@@ -96,7 +106,7 @@ Das Datum wird in dieser Reihenfolge ermittelt:
    werden verworfen.
 2. **Metadaten** — `creation_time` im Container, z. B. bei `.m4a` vom iPhone.
    WhatsApp-`.opus`-Dateien haben keine Tags, daher greift hier meist Schritt 1 oder 3.
-3. **Änderungsdatum** der Originaldatei. Der Zeitstempel wird beim Kopieren nach `/tmp` erhalten.
+3. **Änderungsdatum** der Originaldatei. Der Zeitstempel bleibt beim Kopieren erhalten.
 
 ### Modelle
 

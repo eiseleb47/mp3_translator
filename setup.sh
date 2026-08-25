@@ -176,7 +176,7 @@ fi
 
 DOCS="$(xdg-user-dir DOCUMENTS 2>/dev/null || true)"
 [[ -n "$DOCS" && "$DOCS" != "$HOME" ]] || DOCS="$HOME/Documents"
-mkdir -p "$DOCS/audio_texte"
+mkdir -p "$DOCS/audio_texte" "$DOCS/audio_dateien"
 
 if [[ -n "$PREFETCH" ]]; then
   say "Modell '$PREFETCH' herunterladen"
